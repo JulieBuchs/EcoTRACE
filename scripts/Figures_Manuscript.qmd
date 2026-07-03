@@ -1,0 +1,902 @@
+---
+title: "Figures (Manuscript)"
+author:
+  - Annika M. Wyss
+  - Emmanuel T. Guizar Rosales
+  - Michael Schulte-Mecklenbeck
+  - Julie Buchs
+  - Ulf J.J. Hahnel
+  - Daria Knoch
+date: today
+date-format: "[last rendered on:] MMM D, YYYY"
+fig-cap-location: bottom
+format:
+  html:
+    toc: true
+    toc-depth: 5
+    toc-expand: 1
+    number-sections: false
+    code-fold: true
+    code-summary: "Show the code"
+    lightbox: auto
+    embed-resources: true
+    execute:
+      include: true
+      echo: true
+      cache: false
+      message: false
+      warning: false
+editor: visual
+editor_options: 
+  chunk_output_type: console
+bibliography: references_supplementaryInformation.bib
+---
+
+```{r}
+#| label: setup
+#| include: false
+#| cache: false
+
+## ---- Package management -----------------------------------------------------
+
+# install librarian if needed
+if (!requireNamespace("librarian", quietly = TRUE)) {
+  install.packages("librarian")
+}
+
+# load required packages
+librarian::shelf(
+  tidyverse,
+  easystats,
+  mirai,
+  sjPlot,
+  here,
+  parallel,
+  tictoc,
+  emmeans,
+  interactions,
+  jtools,
+  usmap,
+  fs,
+  ggpubr,
+  ggdist,
+  ggrepel,
+  faux,
+  lme4,
+  lmerTest,
+  ggeffects,
+  binom,
+  ggthemes,
+  sessioninfo,
+  knitr,
+  kableExtra,
+  readxl,
+  apa7,
+  cowplot,
+  viridisLite,
+  flextable,
+  sf,
+  patchwork
+)
+
+## ---- Source project functions -----------------------------------------------
+
+myFunctions <- c(
+  "f_lmer",
+  "f_glmer",
+  "find_merMod",
+  "FUNStormEventsData_filterData_day"
+)
+
+for (f in myFunctions) {
+  source(
+    here::here("functions", paste0(f, ".R"))
+  )
+}
+
+# Prepare state boundaries
+poly_states <- plot_usmap(
+  regions = "states",
+  exclude = c("AK", "HI")
+)$data
+
+# Map for the US plots (use the 2021 map so that the counties in CT match those in the data)
+myYearPlot <- 2021
+```
+
+```{r}
+#| label: import final preprocessed data
+#| cache: false
+
+# Read in preprocessed data
+finaldata <- readRDS(
+  here::here(
+    "data",
+    "20260702_out_05_prep_dataForAnalysis.RDS"
+  )
+)
+
+# Read in EWE data
+data_details_fips <- readRDS(
+  here::here(
+    "data",
+    "20260216_data_details_fips.RDS"
+  )
+)
+```
+
+```{r}
+#| label: create smaller dataframe
+#| cache: false
+
+# Create reduced dataframe
+data_reduced <- finaldata |>
+  dplyr::filter(
+    applyExclusionCriteria == TRUE,
+    filterDaysSinceEvent == 30
+  ) |>
+  dplyr::select(
+    applyExclusionCriteria,
+    filterDaysSinceEvent,
+    dFull_withEpisodes
+  ) |>
+  mutate(
+    dFull_withEpisodes = map(
+      dFull_withEpisodes,
+      ~ .x |>
+        rename(racethn = racethn_simple) |>
+        mutate(
+          across(
+            .cols = c(income, education, racethn),
+            .fns = factor
+          ),
+
+          # Create recency_index
+          recency_index = ifelse(
+            is.na(daysSinceMostRecentEpisode),
+            0,
+            1 / (daysSinceMostRecentEpisode + 1)
+          ),
+
+          # Scale problematic continuous predictors
+          countyIncome = as.numeric(scale(countyIncome)),
+          countyPvi = as.numeric(scale(countyPvi)),
+          sum_damage = as.numeric(scale(sum_damage)),
+          sum_injuries = as.numeric(scale(sum_injuries)),
+          sum_deaths = as.numeric(scale(sum_deaths)),
+          abnormality_final = as.numeric(scale(abnormality_final)),
+          population_density_peopPerSqKilometer =
+            as.numeric(scale(population_density_peopPerSqKilometer))
+        ) |>
+        (\(df) {
+          myVars <- c("income", "education", "racethn")
+
+          for (myVar in myVars) {
+            contrasts(df[[myVar]]) <- contr.sum(nlevels(df[[myVar]]))
+            colnames(contrasts(df[[myVar]])) <-
+              levels(df[[myVar]])[1:(nlevels(df[[myVar]]) - 1)]
+          }
+
+          df
+        })()
+    )
+  )
+
+# Create dataframe (with all collected participants)
+data <- finaldata |>
+  dplyr::filter(
+    applyExclusionCriteria == FALSE,
+    filterDaysSinceEvent == 30
+  ) |>
+  dplyr::select(
+    applyExclusionCriteria,
+    filterDaysSinceEvent,
+    dFull_withEpisodes
+  )
+```
+
+# Estimated Marginal Means of ΔDuration and Choice by Political Affiliation
+
+@fig-EEM_Plot displays estimated marginal means for ΔDuration and predicted probabilities of pro-climate choices, based on the main model without control variables (M1.1).
+
+```{r}
+#| label: Define analysis grid and Fit models H1
+
+# Define fixed and random effects
+M1_grid <- tibble(
+  model = c(
+    "M1.1",
+    "M1.2",
+    "M1.3"
+  ),
+  fixedEffects = c(
+    "polAff_bin_str",
+    "polAff_bin_str + carbon_prcnt + bonus_prcnt + trialNum + CB_carbonUp + CB_selfishLeft",
+    "polAff_bin_str + gender + age + education + income + racethn_simple + ruralUrb"
+  ),
+  randomEffects = c(
+    "(1 | subject) + (1 | trialNum_fixed)",
+    "(1 | subject) + (1 | trialNum_fixed)",
+    "(1 | subject) + (1 | trialNum_fixed)"
+  )
+)
+
+# Add criterion column
+M1_grid <- expand_grid(
+  M1_grid,
+  tibble(criterion = c("deltaDuration", "choice"))
+) |>
+  relocate(criterion, .before = "fixedEffects")
+
+# Cross with preprocessing options
+M1_grid <- expand_grid(
+  M1_grid,
+  data_reduced
+)
+
+# Fit models M1
+m1_path <- here::here("results", "M1_fit_20260304.rds")
+
+if (file.exists(m1_path)) {
+
+  M1_fit <- readRDS(m1_path)
+
+} else {
+
+  n_cores <- max(1, parallel::detectCores() - 1)
+  mirai::daemons(n_cores)
+  tic()
+
+  M1_fit <- M1_grid |>
+    mutate(
+      quietly_safely = pmap(
+        .l = list(
+          myData = dFull_withEpisodes,
+          myCriterion = criterion,
+          myFixedEffects = fixedEffects,
+          myRandomEffects = randomEffects
+        ),
+        .f = in_parallel(
+          function(myData, myCriterion, myFixedEffects, myRandomEffects) {
+
+            worker <- function(myData, myCriterion, myFixedEffects, myRandomEffects) {
+              if (myCriterion == "choice") {
+                f_glmer(myData, myCriterion, myFixedEffects, myRandomEffects)
+              } else {
+                f_lmer(myData, myCriterion, myFixedEffects, myRandomEffects)
+              }
+            }
+
+            purrr::quietly(purrr::safely(worker))(
+              myData, myCriterion, myFixedEffects, myRandomEffects
+            )
+          },
+          f_glmer = f_glmer,
+          f_lmer = f_lmer
+        )
+      )
+    ) |>
+    mutate(
+      fit = map(quietly_safely, \(x) x$result$result),
+      error = map(quietly_safely, \(x) x$result$error),
+      warnings = map(quietly_safely, \(x) x$warnings),
+      messages = map(quietly_safely, \(x) x$messages)
+    ) |>
+    dplyr::select(-quietly_safely)
+
+  toc()
+  mirai::daemons(0)
+
+  saveRDS(M1_fit, m1_path)
+}
+
+stopifnot(is.data.frame(M1_fit))
+```
+
+```{r}
+#| label: fig-emm-choice
+#| results: "hide"
+
+# Select the fitted model of interest (deltaDuration) from the model table
+fit_inspect_duration <- M1_fit |>
+  filter(
+    model == "M1.1",
+    criterion == "deltaDuration",
+    applyExclusionCriteria == TRUE,
+    filterDaysSinceEvent == 30
+  ) |>
+  pluck("fit", 1)
+
+# Select the fitted model of interest (choice) from the model table
+fit_inspect_choice <- M1_fit |>
+  filter(
+    model == "M1.1",
+    criterion == "choice",
+    applyExclusionCriteria == TRUE,
+    filterDaysSinceEvent == 30
+  ) |>
+  pluck("fit", 1)
+
+# Compute estimated marginal means for political affiliation (deltaDuration)
+emm_duration <- estimate_means(
+  fit_inspect_duration,
+  by = "polAff_bin_str",
+  backend = "emmeans"
+) |>
+  as.data.frame()
+
+# Compute estimated marginal means for political affiliation (choice)
+emm_choice <- estimate_means(
+  fit_inspect_choice,
+  by = "polAff_bin_str",
+  backend = "emmeans"
+) |>
+  as.data.frame()
+
+# Plot estimated marginal means with confidence intervals for deltaDuration
+plot_emm_duration <- ggplot(emm_duration, aes(x = polAff_bin_str, y = Mean, color = polAff_bin_str)) +
+  geom_point(size = 7) +
+  geom_errorbar(aes(ymin = CI_low, ymax = CI_high), 
+                width = 0.1,
+                linewidth = 1.5) +
+  scale_color_manual(
+    values = c(
+      "Rep" = "#E81B23",
+      "Dem" = "#0047AB"
+    )
+  ) +
+  scale_x_discrete(
+    labels = c(
+      "Rep" = "Republican",
+      "Dem" = "Democrat"
+    )
+  ) +
+  scale_y_continuous(
+    limits = c(0, 0.2),
+    breaks = seq(0, 0.2, 0.05)
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "none"
+  ) +
+  labs(
+    x = "Political affiliation",
+    y = "ΔDuration (estimated marginal means)"
+  ) +
+  ggplot2::theme(
+    axis.title.x = element_text(size = 30, margin = margin(t = 20)),
+    axis.title.y = element_text(size = 30, margin = margin(r = 20)),
+    axis.text = element_text(size = 25)
+  )
+
+# Plot estimated marginal means with confidence intervals for choice
+plot_emm_choice <- ggplot(emm_choice, aes(x = polAff_bin_str, y = Probability, color = polAff_bin_str)) +
+  geom_point(size = 7) +
+  geom_errorbar(aes(ymin = CI_low, ymax = CI_high), 
+                width = 0.1,
+                linewidth = 1.5) +
+  scale_color_manual(
+    values = c(
+      "Rep" = "#E81B23",
+      "Dem" = "#0047AB"
+    )
+  ) +
+  scale_x_discrete(
+    labels = c(
+      "Rep" = "Republican",
+      "Dem" = "Democrat"
+    )
+  ) +
+  scale_y_continuous(
+    labels = scales::label_percent(), 
+    limits = c(0, 1)
+    ) +
+  theme_bw() +
+  theme(
+    legend.position = "none"
+  ) +
+  labs(
+    x = "Political affiliation",
+    y = "Probability of pro-climate choice"
+  ) +
+  ggplot2::theme(
+    axis.title.x = element_text(size = 30, margin = margin(t = 20)),
+    axis.title.y = element_text(size = 30, margin = margin(r = 20)),
+    axis.text = element_text(size = 25)
+  )
+
+# Combine the two plots
+plot_emm_combined <- plot_emm_duration + plot_emm_choice +
+  plot_annotation(tag_levels = "A") +
+  plot_layout(guides = "collect") &
+  theme(
+    plot.tag = element_text(size = 30, face = "bold"),
+    plot.margin = margin(10,50,10,10)
+  )
+
+# Save plot
+jpeg(
+  file = "../images/emm_combined.jpeg",
+  width = 16, height = 10, units = "in", res = 600
+)
+
+print(plot_emm_combined)
+
+dev.off()
+```
+
+::: {#fig-EEM_Plot}
+```{r}
+#| echo: false
+#| include: true
+
+knitr::include_graphics("../images/emm_combined.jpeg")
+```
+
+Estimated marginal means of ΔDuration and Choice by political affiliation: Points represent estimated marginal means from the main model without control variables. Error bars indicate 95% confidence intervals. Panel A shows estimated marginal means for Δ duration, and Panel B predicted probabilities for pro-climate choices.
+:::
+
+# Distribution of Extreme Weather Episodes
+
+@fig-EWELast30Days displays separate county-level maps of the United States for each extreme weather event (EWE) type and for all types combined, indicating whether and how many episodes occurred in each county during the 30 days preceding the midpoint of data collection.
+
+```{r}
+#| label: Calculate middleDay of data collection
+#| results: 'hide'
+
+# Compute number of unique subjects per day
+counts <- data$dFull_withEpisodes[[1]] %>%
+  mutate(day = as.Date(recordedDate)) %>%
+  group_by(day) %>%
+  summarise(n_subjects = n_distinct(subject), .groups = "drop") %>%
+  arrange(day) %>%
+  mutate(
+    cum_subjects = cumsum(n_subjects),
+    total_subjects = sum(n_subjects)
+  )
+
+# Identify the day when 50% of subjects have been collected
+middle_day <- counts %>%
+  filter(cum_subjects >= total_subjects / 2) %>%
+  slice(1) %>%
+  pull(day)
+```
+
+```{r}
+#| label: callFUNStormEventsData_filterData_day
+#| results: 'hide'
+
+# Define variables of interest
+myEventTypes <- c(
+  "Excessive Heat",
+  "Drought",
+  "Wildfire",
+  "Flash Flood",
+  "Coastal Flood",
+  "Strong Wind",
+  "Hail",
+  "Tornado"
+)
+
+# Call function
+out <- FUNStormEventsData_filterData_day(
+  myData = data_details_fips,
+  myDate = middle_day,
+  myEventTypes = myEventTypes
+)
+```
+
+```{r}
+#| label: Create EWE Plot
+#| results: "hide"
+
+# Prepare data for the plots
+plot_data_base <- out %>%
+  filter(time_window == "last30days") %>%
+  mutate(event_type = as.character(event_type))
+
+plot_data_types <- plot_data_base
+
+plot_data_all <- plot_data_base %>%
+  group_by(fips) %>%
+  summarise(
+    nEpisodes = sum(nEpisodes, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(event_type = "All Event Types")
+
+# Prepare color scale
+myMaxEpisodes <- max(
+  c(plot_data_all$nEpisodes, plot_data_types$nEpisodes),
+  na.rm = TRUE
+)
+
+myLegendLevels <- as.character(0:myMaxEpisodes)
+
+plot_data_types <- plot_data_types %>%
+  mutate(
+    nEpisodes_factor = factor(
+      as.character(nEpisodes),
+      levels = myLegendLevels
+    )
+  )
+
+plot_data_all <- plot_data_all %>%
+  mutate(
+    nEpisodes_factor = factor(
+      as.character(nEpisodes),
+      levels = myLegendLevels
+    )
+  )
+
+myColors <- c(
+  "0" = "white",
+  stats::setNames(
+    viridisLite::viridis(myMaxEpisodes),
+    as.character(1:myMaxEpisodes)
+  )
+)
+
+scale_fill_common <- scale_fill_manual(
+  name = "Number of Episodes",
+  values = myColors,
+  limits = myLegendLevels,
+  breaks = myLegendLevels,
+  labels = myLegendLevels,
+  drop = FALSE,
+  na.translate = FALSE
+)
+
+# Define common theme
+theme_map_common <- theme_bw() +
+  theme(
+    text = element_text(size = 15),
+    panel.grid = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank()
+  )
+
+# Define function to create maps
+make_map <- function(myData, myFacetCols = NULL, myLegend = TRUE, myTextSize = 15) {
+  plot_usmap(
+    data = myData,
+    data_year = myYearPlot,
+    values = "nEpisodes_factor",
+    regions = "counties",
+    exclude = c("AK", "HI"),
+    color = "black",
+    linewidth = 0.1,
+    show.legend = TRUE
+  ) +
+    geom_sf(
+      data = poly_states,
+      color = "black",
+      fill = NA,
+      linewidth = 0.3,
+      inherit.aes = FALSE
+    ) +
+    scale_fill_common +
+        guides(
+      fill = guide_legend(
+        title.position = "top",
+        title.hjust = 0.5
+      )
+    ) +
+    facet_wrap(~event_type, ncol = myFacetCols) +
+    theme_map_common +
+    theme(
+      text = element_text(size = myTextSize),
+      legend.text = element_text(size = 12),
+      legend.title = element_text(size = 15),
+      legend.position = if (myLegend) "right" else "none"
+    )
+}
+
+# Create individual plots
+p_all <- make_map(plot_data_all)
+p_types <- make_map(plot_data_types, myFacetCols = 4, myLegend = FALSE, myTextSize = 13)
+
+# Combine plots
+final_plot <- plot_grid(
+  p_all,
+  p_types,
+  ncol = 1,
+  rel_heights = c(1.15, 1.25)
+)
+
+# Save plot
+jpeg(
+  file = "../images/mapEWELast30Days.jpeg",
+  width = 16, height = 12, units = "in", res = 600
+)
+
+plot(final_plot)
+dev.off()
+```
+
+::: {#fig-EWELast30Days}
+```{r}
+#| echo: false
+#| include: true
+
+knitr::include_graphics("../images/mapEWELast30Days.jpeg")
+```
+
+Distribution of EWE mid July to mid August 2025: Counties are colored by the number of EWE recorded in the past 30 days preceding the midpoint of data collection (≈50% of the sample collected, August 23, 2025). This reference point was chosen because data collection spanned approximately four weeks.
+:::
+
+# Interaction Between EWE and Subjective Attribution of EWE to Climate Change on ΔDuration
+
+@fig-ProbingM3_3 displays the Johnson–Neyman plot probing the interaction between EWE and subjective attribution of EWE to climate change on ΔDuration, indicating that EWE exposure increases ΔDuration at low levels of subjective attribution, but decreases ΔDuration at high levels of subjective attribution.
+
+```{r}
+#| label: Define analysis grid and fit models H3
+#| results: "hide"
+
+# Define fixed and random effects
+M3_grid <- tibble(
+  model = c(
+    "M3.1",
+    "M3.2",
+    "M3.3",
+    "M3.4",
+    "M3.5",
+    "M3.6",
+    "M3.7",
+    "M3.8"
+  ),
+  fixedEffects = c(
+    "polAff_bin_str + nEpisodesIsGreaterThanZero + EWE_subjAttr_mean",
+    "polAff_bin_str*EWE_subjAttr_mean",
+    "nEpisodesIsGreaterThanZero*EWE_subjAttr_mean",
+    "polAff_bin_str * nEpisodesIsGreaterThanZero + polAff_bin_str * EWE_subjAttr_mean + nEpisodesIsGreaterThanZero * EWE_subjAttr_mean",
+    "polAff_bin_str * nEpisodesIsGreaterThanZero * EWE_subjAttr_mean",
+    "polAff_bin_str * nEpisodesIsGreaterThanZero * EWE_subjAttr_mean + trialNum + CB_carbonUp + gender + age + racethn",
+    "polAff_bin_str * nEpisodesIsGreaterThanZero * EWE_subjAttr_mean + abnormality_final + sum_damage + sum_injuries + sum_deaths + recency_index + population_density_peopPerSqKilometer + countyPvi + countyIncome",
+    "polAff_bin_str * nEpisodes_durationWeighted * EWE_subjAttr_mean"
+  ),
+  randomEffects = c(
+    "(1 | subject) + (1 | trialNum_fixed)",
+    "(1 | subject) + (1 | trialNum_fixed)",
+    "(1 | subject) + (1 | trialNum_fixed)",
+    "(1 | subject) + (1 | trialNum_fixed)",
+    "(1 | subject) + (1 | trialNum_fixed)",
+    "(1 | subject) + (1 | trialNum_fixed)",
+    "(1 | subject) + (1 | trialNum_fixed)",
+    "(1 | subject) + (1 | trialNum_fixed)"
+  )
+)
+
+# Add criterion column
+M3_grid <- expand_grid(
+  M3_grid,
+  tibble(criterion = c("deltaDuration", "choice"))
+) |>
+  relocate(criterion, .before = "fixedEffects") |>
+  mutate(
+    fixedEffects = case_when(
+      model == "M3.6" & criterion == "choice" ~
+        "polAff_bin_str * nEpisodesIsGreaterThanZero * EWE_subjAttr_mean + carbon_prcnt + bonus_prcnt + age + racethn",
+      TRUE ~ fixedEffects
+    )
+  )
+
+# Cross with preprocessing options
+M3_grid <- expand_grid(
+  M3_grid,
+  data_reduced
+)
+
+# Fit model
+m3_path <- here::here("results", "M3_fit_20260304.rds")
+
+if (file.exists(m3_path)) {
+
+  M3_fit <- readRDS(m3_path)
+
+} else {
+
+  n_cores <- max(1, parallel::detectCores() - 1)
+  mirai::daemons(n_cores)
+  tic()
+  
+  M3_fit <- M3_grid |>
+  mutate(
+    quietly_safely = pmap(
+      .l = list(
+        myData = dFull_withEpisodes,
+        myCriterion = criterion,
+        myFixedEffects = fixedEffects,
+        myRandomEffects = randomEffects
+      ),
+      .f = in_parallel(
+        function(
+          myData,
+          myCriterion,
+          myFixedEffects,
+          myRandomEffects
+        ) {
+          # inner worker defined here, then wrapped by quietly(safely())
+          worker <- function(
+            myData,
+            myCriterion,
+            myFixedEffects,
+            myRandomEffects
+          ) {
+            if (myCriterion == "choice") {
+              f_glmer(
+                myData = myData,
+                myCriterion = myCriterion,
+                myFixedEffects = myFixedEffects,
+                myRandomEffects = myRandomEffects
+              )
+            } else if (myCriterion == "deltaDuration") {
+              f_lmer(
+                myData = myData,
+                myCriterion = myCriterion,
+                myFixedEffects = myFixedEffects,
+                myRandomEffects = myRandomEffects
+              )
+            }
+          }
+          # call the wrapped worker so we still capture result/warnings/errors/messages
+          purrr::quietly(purrr::safely(worker))(
+            myData,
+            myCriterion,
+            myFixedEffects,
+            myRandomEffects
+          )
+        },
+        # we need to pass f_glmer and f_lmer into the worker's environment
+        f_glmer = f_glmer,
+        f_lmer = f_lmer
+      )
+    )
+  ) |>
+  mutate(
+    fit = map(quietly_safely, \(x) x$result$result),
+    error = map(quietly_safely, \(x) x$result$error),
+    warnings = map(quietly_safely, \(x) x$warnings),
+    messages = map(quietly_safely, \(x) x$messages)
+  ) |>
+  select(-quietly_safely)
+
+  
+  toc()
+  mirai::daemons(0)
+
+  saveRDS(M3_fit, m3_path)
+}
+
+stopifnot(is.data.frame(M3_fit))
+```
+
+```{r}
+#| label: fig-probingM3.3
+#| results: "hide"
+
+# Extract the fitted model of interest (M3.3, deltaDuration)
+m_probe_M3_3 <- M3_fit |>
+  filter(model == "M3.3", criterion == "deltaDuration") |>
+  pull(fit, 1) |>              
+  find_merMod()                
+
+# Get the model frame (data used in the model)
+mf_M3_3 <- model.frame(m_probe_M3_3)
+
+# Compute mean and SD of the moderator (subjective attribution)
+myMean_M3_3 <- mean(mf_M3_3$EWE_subjAttr_mean, na.rm = TRUE)
+mySD_M3_3   <- sd(mf_M3_3$EWE_subjAttr_mean, na.rm = TRUE)
+
+# Determine observed range of the moderator
+obsMin_M3_3 <- min(mf_M3_3$EWE_subjAttr_mean, na.rm = TRUE)
+obsMax_M3_3 <- max(mf_M3_3$EWE_subjAttr_mean, na.rm = TRUE)
+
+# Define probing values: mean ± 1 SD (bounded by observed range)
+myLow_M3_3  <- max(obsMin_M3_3, myMean_M3_3 - mySD_M3_3)
+myHigh_M3_3 <- min(obsMax_M3_3, myMean_M3_3 + mySD_M3_3)
+
+# Extract fixed effects from the model
+b_M3_3 <- fixef(m_probe_M3_3)
+
+# Compute simple slopes of EWE at low, mean, and high moderator levels
+y_low_M3_3 <- b_M3_3["nEpisodesIsGreaterThanZeroTRUE"] + 
+  b_M3_3["nEpisodesIsGreaterThanZeroTRUE:EWE_subjAttr_mean"] * myLow_M3_3
+
+y_mean_M3_3 <- b_M3_3["nEpisodesIsGreaterThanZeroTRUE"] + 
+  b_M3_3["nEpisodesIsGreaterThanZeroTRUE:EWE_subjAttr_mean"] * myMean_M3_3
+
+y_high_M3_3 <- b_M3_3["nEpisodesIsGreaterThanZeroTRUE"] + 
+  b_M3_3["nEpisodesIsGreaterThanZeroTRUE:EWE_subjAttr_mean"] * myHigh_M3_3
+
+# Create data frame with the three reference points for plotting
+mark_df_M3_3 <- tibble(
+  x = c(myLow_M3_3, myMean_M3_3, myHigh_M3_3),
+  y = c(y_low_M3_3, y_mean_M3_3, y_high_M3_3),
+  label = c("-1 SD", "Mean", "+1 SD")
+)
+
+# Run Johnson-Neyman analysis (region of significance)
+jn_M3_3 <- johnson_neyman(
+  m_probe_M3_3,
+  pred = "nEpisodesIsGreaterThanZeroTRUE",
+  modx = "EWE_subjAttr_mean",
+  alpha = .05
+)
+
+# Add custom points and labels (mean ± SD) to the JN plot
+plot_jn_M3_3 <- jn_M3_3$plot +
+  geom_point(
+    data = mark_df_M3_3,
+    aes(x = x, y = y),
+    size = 5
+  ) +
+  geom_text(
+    data = mark_df_M3_3,
+    aes(x = x, y = y, label = label),
+    nudge_y = c(0.03, -0.03, -0.03),
+    size = 8
+  ) +
+  labs(
+    title = NULL,
+    x = "Subjective Attribution of EWE to Climate Change",
+    y = "Slope of EWE on ΔDuration"
+  ) + 
+  scale_x_continuous(breaks = seq(0, 6, 1)) +
+  scale_y_continuous(breaks = seq(-0.2, 0.4, 0.1)) + 
+  theme(
+    axis.title.x = element_text(size = 30, margin = margin(t = 20)),
+    axis.title.y = element_text(size = 30, margin = margin(r = 20)),
+    axis.text = element_text(size = 25),
+    legend.text = element_text(size = 25)
+  )
+
+# Save plot
+jpeg(
+  file = "../images/jn_M3_3_twoWayInteraction.jpeg",
+  width = 16, height = 12, units = "in", res = 600
+)
+
+print(plot_jn_M3_3)
+
+dev.off()
+```
+
+::: {#fig-ProbingM3_3}
+```{r}
+#| echo: false
+#| include: true
+
+knitr::include_graphics("../images/jn_M3_3_twoWayInteraction.jpeg")
+```
+
+Johnson–Neyman plot probing the interaction between EWE and subjective attribution of EWE to climate change on ΔDuration. The line represents the conditional effect of political affiliation on ΔDuration across values of subjective attribution. Shaded areas indicate regions where the effect is statistically significant (*p* \< .05; blue) or non-significant (red). Points indicate the conditional effects at −1 *SD*, the mean, and +1 *SD* of subjective attribution. The black horizontal bar represents the observed range of the subjective attribution.
+:::
+
+:::: {.content-visible when-format="html"}
+::: {.callout-note collapse="true" appearance="simple"}
+## Expand for Session Info
+
+```{r}
+#| label: addSessionInfo
+#| echo: false
+
+if (knitr::is_html_output()) {
+  txt <- capture.output(print(sessioninfo::session_info(pkgs = "attached")))
+  
+  txt <- txt[!grepl("^\\s*\\[[0-9]+\\]\\s+[A-Za-z]:[/\\\\]", txt)]
+  txt <- txt[!grepl("^\\s*pandoc\\s+", txt)]
+  txt <- txt[!grepl("^\\s*quarto\\s+", txt)]
+
+  knitr::asis_output(
+    paste0(
+      "<pre style=\"background-color:#f8f8f8; padding:1em; border-radius:6px; ",
+      "overflow-x:auto; font-size:0.95em;\">",
+      htmltools::htmlEscape(paste(txt, collapse = "\n")),
+      "</pre>"
+    )
+  )
+}
+```
+:::
+::::

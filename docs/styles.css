@@ -1,0 +1,37 @@
+/* css styles */
+
+.tabfig-note {
+  font-size: 0.9em;
+  margin-top: 0.2em;
+  margin-bottom: 1em;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.tabfig-note p {
+  margin: 0;
+}
+
+table + table {
+  margin-top: 3em;
+}
+
+table {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+h1, h2, h3 {
+  break-after: avoid;
+}
+
+@media print {
+  body {
+    font-size: 11pt;
+  }
+
+  .tabfig-note {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}

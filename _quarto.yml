@@ -1,0 +1,32 @@
+project:
+  type: website
+  output-dir: docs
+  resources: images/*
+
+website:
+  title: "EcoTRACE"
+  navbar:
+    left:
+      - text: Results
+        menu: 
+          - href: scripts/Figures_Manuscript.qmd
+            text: "Figures (Manuscript)"
+          - href: scripts/Results.qmd
+            text: "Figures and Tables (Supplementary Information)"
+      - text: Methods
+        href: scripts/Methods.qmd
+      - text: Supplementary Information
+        href: scripts/SupplementaryInformation.qmd
+    right: 
+      - icon: github
+        href: https://github.com/JulieBuchs/EcoTRACE
+  page-footer: 'Site maintained by [julie.buchs@unibe.ch](mailto:julie.buchs@unibe.ch?subject=EcoTRACE%20Registered%20Report)'
+
+format:
+  html:
+    theme: cosmo
+    css: styles.css
+    toc: true
+
+editor: visual
+

@@ -1,0 +1,30 @@
+---
+title: ""
+toc: false
+---
+
+![](images/Logo_Globe_EcoTRACE.jpg){fig-align="center" width="300"}
+
+## Registered Report Stage 2: Supplementary Information
+
+Welcome to our project's Supplementary Information website. Here, you'll find all the scripts used to analyze the data of the second stage of our Registered Report, which has been submitted to *Nature Climate Change*:
+
+## 1. Results
+
+This section contains the analyses underlying the tables and figures reported in the Results section.
+
+### 1.1 Figures (Manuscript)
+
+This subsection provides the analyses for the figures presented in the manuscript.
+
+### 1.2 Figures and Tables (Supplementary Information)
+
+This subsection provides the analyses for the tables and figures presented in the Supplementary Information.
+
+## 2. Methods
+
+This section includes all tables and figures referenced in the Methods section and reported in the Supplementary Information.
+
+## 3. Supplementary Information
+
+This section provides the complete Supplementary Information.
